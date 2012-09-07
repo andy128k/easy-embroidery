@@ -2,30 +2,39 @@ import math
 from gi.repository import GObject, Gtk, Gdk
 
 class Canvas(Gtk.Layout):
+    width = 200 # mm
+    height = 200 # mm
+    ppm = 5 # points per milimeter
+
+    def pixel_width(self):
+        return self.width * self.ppm
+
+    def pixel_height(self):
+        return self.width * self.ppm
+
     def __init__(self):
         Gtk.Layout.__init__(self)
-        self.set_size(1000, 1000)
+        self.set_size(self.pixel_width(), self.pixel_height())
         self.connect('draw', self.draw)
 
     def draw(self, widget, cr):
-        width = self.get_allocated_width() / 50.0
-        height = self.get_allocated_height() / 50.0
-
-        cr.scale(50, 50)
+        cr = self.get_bin_window().cairo_create()
 
         cr.set_source_rgb(1, 1, 1)
-        cr.rectangle(0, 0, width, height)
+        cr.rectangle(0, 0, self.pixel_width(), self.pixel_height())
         cr.fill()
 
         cr.set_source_rgb(0.2, 0.2, 0.2)
-        cr.set_line_width(0.01)
-        for x in xrange(1, int(math.ceil(width))):
-            cr.move_to(x+0.025, 0)
-            cr.line_to(x+0.025, height)
+        cr.set_line_width(0.5)
+        for i in xrange(10, self.width, 10): # step 1 cm
+            x = i * self.ppm + 1.25
+            cr.move_to(x, 0)
+            cr.line_to(x, self.pixel_height())
             cr.stroke()
-        for y in xrange(1, int(math.ceil(height))):
-            cr.move_to(0, y+0.025)
-            cr.line_to(width, y+0.025)
+        for i in xrange(10, self.height, 10): # step 1 cm
+            y = i * self.ppm + 1.25
+            cr.move_to(0, y)
+            cr.line_to(self.pixel_width(), y)
             cr.stroke()
 
 class CanvasObject(Gtk.DrawingArea):
