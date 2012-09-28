@@ -1,10 +1,11 @@
 import math
-from gi.repository import GObject, Gtk, Gdk
+from gi.repository import GObject, Gtk, Gdk, cairo
 
 class Canvas(Gtk.Layout):
     width = 200 # mm
     height = 200 # mm
     ppm = 5 # points per milimeter
+    objects = []
 
     def pixel_width(self):
         return self.width * self.ppm
@@ -37,10 +38,18 @@ class Canvas(Gtk.Layout):
             cr.line_to(self.pixel_width(), y)
             cr.stroke()
 
-class CanvasObject(Gtk.DrawingArea):
-    def __init__(self, canvas):
+        for obj in self.objects:
+            cr.save()
+            obj.draw(cr)
+            cr.restore()
+
+class Handle(Gtk.DrawingArea):
+    def __init__(self, canvas, color=None):
         Gtk.DrawingArea.__init__(self)
         self.canvas = canvas
+        self.color = color or (0.2, 0.8, 0.2)
+        self.on_move = None
+        self.move_disabled = False
         self.set_size_request(10, 10)
         self.set_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON1_MOTION_MASK)
         self.connect('draw', self.draw)
@@ -60,8 +69,20 @@ class CanvasObject(Gtk.DrawingArea):
     def get_y(self):
         return self.get_int_child_property('y')
 
-    def set_position(self, x, y):
+    def set_position(self, x, y, disable_handler=False):
+        if self.move_disabled:
+            return
+        self.move_disabled = True
+
+        if not disable_handler and self.on_move:
+            old_x = self.get_x()
+            old_y = self.get_y()
+            x, y = self.on_move(old_x, old_y, x, y)
+
         self.canvas.move(self, x, y)
+        self.canvas.queue_draw()
+
+        self.move_disabled = False
 
     def button_press_event(self, obj, event):
         self.sx = event.x
@@ -78,96 +99,78 @@ class CanvasObject(Gtk.DrawingArea):
         return True
 
     def draw(self, widget, cr):
-        cr.set_source_rgb(0.8, 0.2, 0.3)
-        cr.rectangle(0, 0, 10, 10)
-        cr.fill()
-
-class Rectangle(CanvasObject):
-    def __init__(self, canvas):
-        CanvasObject.__init__(self, canvas)
-        self.set_size_request(70, 50)
-
-    def draw(self, widget, cr):
-        cr.set_source_rgb(0.8, 0.8, 0.3)
-        cr.rectangle(0, 0, 70, 50)
-        cr.fill()
-
-class Handle(CanvasObject):
-    def __init__(self, canvas):
-        CanvasObject.__init__(self, canvas)
-
-    def draw(self, widget, cr):
-        cr.set_source_rgb(0.2, 0.8, 0.2)
+        cr.set_source_rgb(*self.color)
         cr.rectangle(0, 0, 10, 10)
         cr.fill()
         cr.set_source_rgb(0, 0, 0)
         cr.rectangle(0, 0, 10, 10)
         cr.stroke()
 
-class ResizableRectangle(CanvasObject):
-    def __init__(self, canvas):
-        CanvasObject.__init__(self, canvas)
-        self.width = 80
-        self.height = 50
-        self.set_size_request(self.width, self.height)
+class ResizableRectangle(object):
+    def __init__(self, canvas, x, y, w, h):
+        self.x = x
+        self.y = y
+        self.width = w
+        self.height = h
 
+        self.position_handle = Handle(canvas, (0.2, 0.2, 0.8))
         self.width_handle = Handle(canvas)
-        self.width_handle_set_position_old = self.width_handle.set_position
-        self.width_handle.set_position = self.width_handle_set_position
-
         self.height_handle = Handle(canvas)
-        self.height_handle_set_position_old = self.height_handle.set_position
-        self.height_handle.set_position = self.height_handle_set_position
-
         self.corner_handle = Handle(canvas)
-        self.corner_handle_set_position_old = self.corner_handle.set_position
-        self.corner_handle.set_position = self.corner_handle_set_position
+        canvas.objects.append(self)
 
-    def width_handle_set_position(self, hx, hy):
-        x = self.get_x()
-        y = self.get_y()
-        self.width = hx + 5 - x
+        self.position_handle.on_move = self.position_handle_moved
+        self.width_handle.on_move = self.width_handle_moved
+        self.height_handle.on_move = self.height_handle_moved
+        self.corner_handle.on_move = self.corner_handle_moved
+
+        self.position_handles()
+
+    def position_handle_moved(self, old_x, old_y, hx, hy):
+        self.x = hx + 5
+        self.y = hy + 5
+        self.position_handles()
+        return hx, hy
+
+    def width_handle_moved(self, old_x, old_y, hx, hy):
+        self.width = hx + 5 - self.x
         if self.width < 0:
             self.width = 0
-        self.set_size_request(self.width, self.height)
+            hx = old_x
         self.position_handles()
+        return hx, old_y
 
-    def height_handle_set_position(self, hx, hy):
-        x = self.get_x()
-        y = self.get_y()
-        self.height = hy + 5 - y
+    def height_handle_moved(self, old_x, old_y, hx, hy):
+        self.height = hy + 5 - self.y
         if self.height < 0:
             self.height = 0
-        self.set_size_request(self.width, self.height)
+            hy = old_y
         self.position_handles()
+        return old_x, hy
 
-    def corner_handle_set_position(self, hx, hy):
-        x = self.get_x()
-        y = self.get_y()
-        self.width = hx + 5 - x
-        self.height = hy + 5 - y
+    def corner_handle_moved(self, old_x, old_y, hx, hy):
+        self.width = hx + 5 - self.x
+        self.height = hy + 5 - self.y
         if self.width < 0:
             self.width = 0
+            hx = old_x
         if self.height < 0:
             self.height = 0
-        self.set_size_request(self.width, self.height)
+            hy = old_y
         self.position_handles()
-
-    def set_position(self, x, y):
-        super(ResizableRectangle, self).set_position(x, y)
-        self.position_handles()
+        return hx, hy
 
     def position_handles(self):
-        x = self.get_x()
-        y = self.get_y()
-        self.width_handle_set_position_old(x + self.width - 5, y + (self.height - 5) / 2)
-        self.height_handle_set_position_old(x + (self.width - 5) / 2, y + self.height - 5)
-        self.corner_handle_set_position_old(x + self.width - 5, y + self.height - 5)
+        self.position_handle.set_position(self.x - 5, self.y - 5, True)
+        self.width_handle.set_position(self.x + self.width - 5, self.y + (self.height - 5) / 2, True)
+        self.height_handle.set_position(self.x + (self.width - 5) / 2, self.y + self.height - 5, True)
+        self.corner_handle.set_position(self.x + self.width - 5, self.y + self.height - 5, True)
 
-    def draw(self, widget, cr):
+    def draw(self, cr):
+        cr.translate(self.x, self.y)
         cr.set_line_width(1)
         cr.set_source_rgb(0.2, 0.2, 0.3)
-        cr.rectangle(0.5, 0.5, int(self.width) - 0.5, int(self.height) - 0.5)
+        cr.rectangle(0, 0, int(self.width) - 0.5, int(self.height) - 0.5)
         cr.stroke()
 
 class MainWindow(Gtk.Window):
@@ -192,17 +195,8 @@ class MainWindow(Gtk.Window):
         self.canvas = Canvas()
         sw.add(self.canvas)
 
-        r = Rectangle(self.canvas)
-        r.set_position(50, 50)
-
-        r = Rectangle(self.canvas)
-        r.set_position(250, 50)
-
-        r = Rectangle(self.canvas)
-        r.set_position(350, 50)
-
-        r = ResizableRectangle(self.canvas)
-        r.set_position(50, 150)
+        ResizableRectangle(self.canvas, 50, 150, 80, 50)
+        ResizableRectangle(self.canvas, 100, 250, 180, 150)
 
 win = MainWindow()
 win.connect("delete-event", Gtk.main_quit)
